@@ -1,5 +1,5 @@
 import { ReloadOptions, router } from '@inertiajs/core'
-import { defineComponent, h, PropType, SlotsType } from 'vue'
+import { computed, defineComponent, h, nextTick, onMounted, onUnmounted, PropType, ref, SlotsType, watch } from 'vue'
 import { usePage } from './app'
 
 export default defineComponent({
@@ -28,110 +28,123 @@ export default defineComponent({
       default: false,
     },
   },
-  data() {
-    return {
-      loaded: false,
-      fetching: false,
-      observer: null as IntersectionObserver | null,
-    }
-  },
-  unmounted() {
-    this.observer?.disconnect()
-  },
-  computed: {
-    keys(): string[] {
-      return this.data ? ((Array.isArray(this.data) ? this.data : [this.data]) as string[]) : []
-    },
-  },
-  created() {
+  setup(props, { slots }) {
+    const loaded = ref(false)
+    const fetching = ref(false)
+    const observer = ref<IntersectionObserver | null>(null)
+    const triggerRef = ref<Element | null>(null)
+    const keys = computed<string[]>(() =>
+      props.data ? ((Array.isArray(props.data) ? props.data : [props.data]) as string[]) : [],
+    )
+
     const page = usePage()
 
-    this.$watch(
-      () => this.keys.map((key) => page.props[key]),
-      () => {
-        const exists = this.keys.length > 0 && this.keys.every((key) => page.props[key] !== undefined)
-        this.loaded = exists
+    function getReloadParams(): Partial<ReloadOptions> {
+      const reloadParams: Partial<ReloadOptions> = { preserveErrors: true, ...props.params }
 
-        if (exists && !this.always) {
-          return
-        }
+      if (props.data) {
+        reloadParams.only = (Array.isArray(props.data) ? props.data : [props.data]) as string[]
+      }
 
-        if (!this.observer || !exists) {
-          this.$nextTick(this.registerObserver)
-        }
-      },
-      { immediate: true },
-    )
-  },
-  methods: {
-    registerObserver() {
-      this.observer?.disconnect()
+      return reloadParams
+    }
 
-      this.observer = new IntersectionObserver(
+    function prepareRegistration() {
+      const exists = keys.value.length > 0 && keys.value.every((key) => page.props[key] !== undefined)
+      loaded.value = exists
+
+      if (exists && !props.always) {
+        return
+      }
+
+      if (!observer.value || !exists) {
+        nextTick(registerObserver)
+      }
+    }
+
+    function registerObserver() {
+      if (!props.always && loaded.value) {
+        return
+      }
+
+      if (!triggerRef.value) {
+        return
+      }
+
+      observer.value?.disconnect()
+
+      observer.value = new IntersectionObserver(
         (entries) => {
           if (!entries[0].isIntersecting) {
             return
           }
 
-          if (this.fetching) {
+          if (fetching.value) {
             return
           }
 
-          if (!this.always && this.loaded) {
+          if (!props.always && loaded.value) {
             return
           }
 
-          this.fetching = true
+          fetching.value = true
 
-          const reloadParams = this.getReloadParams()
+          const reloadParams = getReloadParams()
 
           router.reload({
             ...reloadParams,
             onStart: (e) => {
-              this.fetching = true
+              fetching.value = true
               reloadParams.onStart?.(e)
             },
             onFinish: (e) => {
-              this.loaded = true
-              this.fetching = false
+              loaded.value = true
+              fetching.value = false
               reloadParams.onFinish?.(e)
 
-              if (!this.always) {
-                this.observer?.disconnect()
+              if (!props.always) {
+                observer.value?.disconnect()
               }
             },
           })
         },
         {
-          rootMargin: `${this.$props.buffer}px`,
+          rootMargin: `${props.buffer}px`,
         },
       )
 
-      this.observer.observe(this.$el.nextSibling)
-    },
-    getReloadParams(): Partial<ReloadOptions> {
-      const reloadParams: Partial<ReloadOptions> = { preserveErrors: true, ...this.$props.params }
+      observer.value.observe(triggerRef.value)
+    }
 
-      if (this.$props.data) {
-        reloadParams.only = (Array.isArray(this.$props.data) ? this.$props.data : [this.$props.data]) as string[]
+    watch(
+      () => keys.value.map((key) => page.props[key]),
+      () => {
+        prepareRegistration()
+      },
+    )
+
+    onMounted(() => {
+      prepareRegistration()
+    })
+
+    onUnmounted(() => {
+      observer.value?.disconnect()
+    })
+
+    return () => {
+      const els = []
+
+      if (props.always || !loaded.value) {
+        els.push(h(props.as, { ref: triggerRef }))
       }
 
-      return reloadParams
-    },
-  },
-  render() {
-    const els = []
+      if (!loaded.value) {
+        els.push(slots.fallback ? slots.fallback({}) : null)
+      } else if (slots.default) {
+        els.push(slots.default({ fetching: fetching.value }))
+      }
 
-    if (this.$props.always || !this.loaded) {
-      els.push(h(this.$props.as))
+      return els
     }
-
-    if (!this.loaded) {
-      els.push(this.$slots.fallback ? this.$slots.fallback({}) : null)
-    } else if (this.$slots.default) {
-      els.push(this.$slots.default({ fetching: this.fetching }))
-    }
-
-    return els
   },
 })

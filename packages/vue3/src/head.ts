@@ -1,5 +1,6 @@
+import type { HeadManager } from '@inertiajs/core'
 import { escape } from 'lodash-es'
-import { defineComponent, DefineComponent, VNode } from 'vue'
+import { defineComponent, DefineComponent, inject, onBeforeUnmount, VNode } from 'vue'
 
 export type InertiaHead = DefineComponent<{
   title?: string
@@ -12,16 +13,16 @@ const Head: InertiaHead = defineComponent({
       required: false,
     },
   },
-  data() {
-    return {
-      provider: this.$headManager.createProvider(),
+  setup(props, { slots }) {
+    const headManager = inject<HeadManager>('headManager')
+
+    if (!headManager) {
+      throw new Error(`<Head> component requires Inertia app context.`)
     }
-  },
-  beforeUnmount() {
-    this.provider.disconnect()
-  },
-  methods: {
-    isUnaryTag(node: VNode) {
+
+    const provider = headManager.createProvider()
+
+    function isUnaryTag(node: VNode) {
       return (
         typeof node.type === 'string' &&
         [
@@ -42,13 +43,17 @@ const Head: InertiaHead = defineComponent({
           'wbr',
         ].indexOf(node.type) > -1
       )
-    },
-    renderTagStart(node: VNode) {
-      node.props = node.props || {}
-      node.props['data-inertia'] = node.props['head-key'] !== undefined ? node.props['head-key'] : ''
+    }
 
-      const attrs = Object.keys(node.props).reduce((carry, name) => {
-        const value = String(node.props![name])
+    function renderTagStart(node: VNode) {
+      node.props = node.props || {}
+
+      const props = node.props as Record<string, unknown>
+      props['data-inertia'] = props['head-key'] !== undefined ? props['head-key'] : ''
+
+      const attrs = Object.keys(props).reduce((carry, name) => {
+        const value = String(props[name])
+
         if (['key', 'head-key'].includes(name)) {
           return carry
         } else if (value === '') {
@@ -59,8 +64,9 @@ const Head: InertiaHead = defineComponent({
       }, '')
 
       return `<${String(node.type)}${attrs}>`
-    },
-    renderTagChildren(node: VNode): string {
+    }
+
+    function renderTagChildren(node: VNode): string {
       const { children } = node
 
       if (typeof children === 'string') {
@@ -69,82 +75,96 @@ const Head: InertiaHead = defineComponent({
 
       if (Array.isArray(children)) {
         return children.reduce<string>((html, child) => {
-          return html + this.renderTag(child as VNode)
+          return html + renderTag(child as VNode)
         }, '')
       }
 
       return ''
-    },
-    isFunctionNode(node: VNode): node is VNode & { type: () => VNode } {
+    }
+
+    function isFunctionNode(node: VNode): node is VNode & { type: () => VNode } {
       return typeof node.type === 'function'
-    },
-    isComponentNode(node: VNode): node is VNode & { type: object } {
+    }
+
+    function isComponentNode(node: VNode): node is VNode & { type: object } {
       return typeof node.type === 'object'
-    },
-    isCommentNode(node: VNode) {
+    }
+
+    function isCommentNode(node: VNode) {
       return /(comment|cmt)/i.test(node.type.toString())
-    },
-    isFragmentNode(node: VNode) {
+    }
+
+    function isFragmentNode(node: VNode) {
       return /(fragment|fgt|symbol\(\))/i.test(node.type.toString())
-    },
-    isTextNode(node: VNode) {
+    }
+
+    function isTextNode(node: VNode) {
       return /(text|txt)/i.test(node.type.toString())
-    },
-    renderTag(node: VNode): string {
-      if (this.isTextNode(node)) {
+    }
+
+    function renderTag(node: VNode): string {
+      if (isTextNode(node)) {
         return String(node.children)
-      } else if (this.isFragmentNode(node)) {
+      } else if (isFragmentNode(node)) {
         return ''
-      } else if (this.isCommentNode(node)) {
+      } else if (isCommentNode(node)) {
         return ''
       }
 
-      let html = this.renderTagStart(node)
+      let html = renderTagStart(node)
 
       if (node.children) {
-        html += this.renderTagChildren(node)
+        html += renderTagChildren(node)
       }
 
-      if (!this.isUnaryTag(node)) {
+      if (!isUnaryTag(node)) {
         html += `</${String(node.type)}>`
       }
 
       return html
-    },
-    addTitleElement(elements: string[]) {
-      if (this.title && !elements.find((tag) => tag.startsWith('<title'))) {
-        elements.push(`<title data-inertia="">${this.title}</title>`)
+    }
+
+    function addTitleElement(elements: string[]) {
+      if (props.title && !elements.find((tag) => tag.startsWith('<title'))) {
+        elements.push(`<title data-inertia="">${props.title}</title>`)
       }
 
       return elements
-    },
-    renderNodes(nodes: VNode[]) {
+    }
+
+    function renderNodes(nodes: VNode[]) {
       const elements = nodes
-        .flatMap((node) => this.resolveNode(node))
-        .map((node) => this.renderTag(node))
+        .flatMap((node) => resolveNode(node))
+        .map((node) => renderTag(node))
         .filter((node) => node)
 
-      return this.addTitleElement(elements)
-    },
-    resolveNode(node: VNode): VNode | VNode[] {
-      if (this.isFunctionNode(node)) {
-        return this.resolveNode(node.type())
-      } else if (this.isComponentNode(node)) {
+      return addTitleElement(elements)
+    }
+
+    function resolveNode(node: VNode): VNode | VNode[] {
+      if (isFunctionNode(node)) {
+        return resolveNode(node.type())
+      } else if (isComponentNode(node)) {
         console.warn(`Using components in the <Head> component is not supported.`)
         return []
-      } else if (this.isTextNode(node) && node.children) {
+      } else if (isTextNode(node) && node.children) {
         return node
-      } else if (this.isFragmentNode(node) && node.children) {
-        return (node.children as VNode[]).flatMap((child) => this.resolveNode(child))
-      } else if (this.isCommentNode(node)) {
+      } else if (isFragmentNode(node) && node.children) {
+        return (node.children as VNode[]).flatMap((child) => resolveNode(child))
+      } else if (isCommentNode(node)) {
         return []
       } else {
         return node
       }
-    },
-  },
-  render() {
-    this.provider.update(this.renderNodes(this.$slots.default ? this.$slots.default() : []))
+    }
+
+    onBeforeUnmount(() => {
+      provider.disconnect()
+    })
+
+    return () => {
+      provider.update(renderNodes(slots.default ? slots.default() : []))
+    }
   },
 })
 

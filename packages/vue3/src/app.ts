@@ -18,6 +18,7 @@ import {
   markRaw,
   Plugin,
   PropType,
+  provide,
   reactive,
   ref,
   shallowRef,
@@ -123,6 +124,7 @@ const App: InertiaApp = defineComponent({
 
     const isServer = typeof window === 'undefined'
     headManager = createHeadManager(isServer, titleCallback || ((title: string) => title), onHeadUpdate || (() => {}))
+    provide('headManager', headManager)
 
     if (!isServer) {
       router.init<DefineComponent>({

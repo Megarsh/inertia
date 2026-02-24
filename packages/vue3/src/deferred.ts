@@ -1,5 +1,6 @@
 import { isSameUrlWithoutQueryOrHash, router } from '@inertiajs/core'
 import { defineComponent, onMounted, onUnmounted, ref, type SlotsType } from 'vue'
+import { usePage } from './app'
 
 const keysAreBeingReloaded = (only: string[], except: string[], keys: string[]): boolean => {
   if (only.length === 0 && except.length === 0) {
@@ -26,22 +27,25 @@ export default defineComponent({
     fallback: {}
   }>,
   setup(props, { slots }) {
+    const page = usePage()
     const reloading = ref(false)
     const activeReloads = new Set<object>()
 
     let removeStartListener: (() => void) | null = null
     let removeFinishListener: (() => void) | null = null
 
-    onMounted(() => {
-      const keys = (Array.isArray(props.data) ? props.data : [props.data]) as string[]
+    function resolveKeys() {
+      return (Array.isArray(props.data) ? props.data : [props.data]) as string[]
+    }
 
+    onMounted(() => {
       removeStartListener = router.on('start', (e) => {
         const visit = e.detail.visit
 
         if (
           visit.preserveState === true &&
           isSameUrlWithoutQueryOrHash(visit.url, window.location) &&
-          keysAreBeingReloaded(visit.only, visit.except, keys)
+          keysAreBeingReloaded(visit.only, visit.except, resolveKeys())
         ) {
           activeReloads.add(visit)
           reloading.value = true
@@ -64,17 +68,14 @@ export default defineComponent({
       activeReloads.clear()
     })
 
-    return { reloading, slots }
-  },
-  render() {
-    const keys = (Array.isArray(this.$props.data) ? this.$props.data : [this.$props.data]) as string[]
+    return () => {
+      if (!slots.fallback) {
+        throw new Error('`<Deferred>` requires a `<template #fallback>` slot')
+      }
 
-    if (!this.$slots.fallback) {
-      throw new Error('`<Deferred>` requires a `<template #fallback>` slot')
+      return resolveKeys().every((key) => page.props[key] !== undefined)
+        ? slots.default?.({ reloading: reloading.value })
+        : slots.fallback({})
     }
-
-    return keys.every((key) => this.$page.props[key] !== undefined)
-      ? this.$slots.default?.({ reloading: this.reloading })
-      : this.$slots.fallback({})
   },
 })
